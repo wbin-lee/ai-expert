@@ -31,6 +31,7 @@ FALLBACK_FONT_FILE = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
 FALLBACK_BOLD_FONT_FILE = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
 
 OUTPUT_PDF = BANK / "2차시험_치팅페이어.pdf"
+OUTPUT_PDF_HALF = BANK / "2차시험(다단).pdf"
 
 # Source order. Files marked optional are skipped if missing.
 SOURCE_FILES = [
@@ -400,9 +401,16 @@ class PdfWriter:
     SECTION_TOP_PAD = 6
     BULLET_INDENT = 14
 
-    def __init__(self, header: str):
+    def __init__(self, header: str, *, half_width: bool = False):
         self.doc = fitz.open()
         self.header = header
+        self.half_width = half_width
+        # In half-width mode, content fills only the left half of the page.
+        # The right half is reserved for hand-written notes.
+        if half_width:
+            self.right_x = self.PAGE_WIDTH / 2 - 8   # small inner gutter
+        else:
+            self.right_x = self.PAGE_WIDTH - self.MARGIN_X
         self.font_names = {
             "body": "kbody",
             "bold": "kbold",
@@ -428,17 +436,28 @@ class PdfWriter:
         pl_w = measure(page_label, 9)
         self._draw_runs(
             page_label,
-            self.PAGE_WIDTH - self.MARGIN_X - pl_w,
+            self.right_x - pl_w,
             30,
             9,
             MUTED_TEXT,
         )
         self.page.draw_line(
             (self.MARGIN_X, 40),
-            (self.PAGE_WIDTH - self.MARGIN_X, 40),
+            (self.right_x, 40),
             color=HAIRLINE,
             width=0.5,
         )
+        # In half-width mode, draw a faint vertical fold line at the page
+        # midpoint so the visual "fold" is obvious when printed.
+        if self.half_width:
+            mid = self.PAGE_WIDTH / 2
+            self.page.draw_line(
+                (mid, 24),
+                (mid, self.PAGE_HEIGHT - 24),
+                color=(0.85, 0.85, 0.85),
+                width=0.4,
+                dashes="[2 3] 0",
+            )
         self.y = self.MARGIN_TOP
 
     def ensure(self, needed: float):
@@ -451,7 +470,7 @@ class PdfWriter:
 
     @property
     def content_width(self) -> float:
-        return self.PAGE_WIDTH - 2 * self.MARGIN_X
+        return self.right_x - self.MARGIN_X
 
     # ---- low-level drawing ----
 
@@ -608,7 +627,7 @@ class PdfWriter:
         line_h = size * 1.5
         if level == 1:
             self.ensure(line_h + 18)
-            band = fitz.Rect(self.MARGIN_X, self.y, self.PAGE_WIDTH - self.MARGIN_X, self.y + line_h + 14)
+            band = fitz.Rect(self.MARGIN_X, self.y, self.right_x, self.y + line_h + 14)
             self.page.draw_rect(band, color=PRIMARY_COLOR, fill=PRIMARY_COLOR)
             self._draw_runs(text, self.MARGIN_X + 14, self.y + size + 8, size, (1, 1, 1), bold=True)
             self.y += line_h + 18
@@ -623,7 +642,7 @@ class PdfWriter:
             self.y += line_h + 4
             self.page.draw_line(
                 (self.MARGIN_X, self.y),
-                (self.PAGE_WIDTH - self.MARGIN_X, self.y),
+                (self.right_x, self.y),
                 color=HAIRLINE,
                 width=0.4,
             )
@@ -699,7 +718,7 @@ class PdfWriter:
         rect = fitz.Rect(
             self.MARGIN_X,
             self.y,
-            self.PAGE_WIDTH - self.MARGIN_X,
+            self.right_x,
             self.y + h,
         )
         self.page.draw_rect(rect, color=CODE_BG, fill=CODE_BG)
@@ -836,18 +855,20 @@ def render_md_file(pdf: PdfWriter, label: str, md_path: Path):
                 pdf.vspace(4)
                 pdf.page.draw_line(
                     (pdf.MARGIN_X, pdf.y),
-                    (pdf.PAGE_WIDTH - pdf.MARGIN_X, pdf.y),
+                    (pdf.right_x, pdf.y),
                     color=HAIRLINE,
                     width=0.4,
                 )
                 pdf.vspace(6)
 
 
-def main():
-    pdf = PdfWriter("2차시험 치팅페이어")
-    # Cover
+def build_pdf(out_path: Path, *, half_width: bool = False, subtitle: str | None = None):
+    pdf = PdfWriter("2차시험 치팅페이어", half_width=half_width)
     pdf.write_heading(1, "2차시험 치팅페이어")
-    pdf.write_paragraph("시험 직전 빠른 복습용. 문제 prompt와 답안을 이어 붙였습니다.")
+    pdf.write_paragraph(
+        subtitle
+        or "시험 직전 빠른 복습용. 문제 prompt와 답안을 이어 붙였습니다."
+    )
     pdf.vspace(4)
 
     for label, md_path in SOURCE_FILES:
@@ -855,8 +876,20 @@ def main():
             continue
         render_md_file(pdf, label, md_path)
 
-    pdf.save(OUTPUT_PDF)
-    print(f"Wrote {OUTPUT_PDF}")
+    pdf.save(out_path)
+    print(f"Wrote {out_path}")
+
+
+def main():
+    # Standard full-width cheat sheet
+    build_pdf(OUTPUT_PDF, half_width=False)
+    # Folded (half-width) variant — left side prints, right side is blank
+    # for hand-written notes when the paper is folded along the dashed line.
+    build_pdf(
+        OUTPUT_PDF_HALF,
+        half_width=True,
+        subtitle="왼쪽 단에만 내용이 인쇄됩니다. 오른쪽은 필기/메모용 공간.",
+    )
 
 
 if __name__ == "__main__":
